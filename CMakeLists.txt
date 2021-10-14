@@ -3,4 +3,4 @@ project(pa1 C)
 
 set(CMAKE_C_STANDARD 99)
 
-add_executable(pa1 main.c)
+add_executable(pa1 main.c ipc.c)

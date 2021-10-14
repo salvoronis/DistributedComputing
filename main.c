@@ -1,74 +1,73 @@
 #include <stdio.h>
 #include <string.h>
-#include <sys/types.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include "common.h"
 #include "ipc.h"
-#include "pa1.h"
-
-struct ProcInfo {
-    //pipes[0] - read [1] - write
-    int     pipes[11][2];
-    pid_t   proc_pid;
-};
-
-struct SystemInfo {
-    int8_t  proc_count;
-    struct ProcInfo proccessesInfo[11];
-};
+#include "proc_info.h"
+#include "io.h"
 
 local_id currentProcId = -1;
 
-int send(void * self, local_id dst, const Message * msg) {
-    struct SystemInfo * sysInfo = (struct SystemInfo *) self;
-    if (currentProcId == -1) {
+int children_slave_work(struct SystemInfo * systemInfo) {
+    printf("%d started\n", currentProcId);
+    //send started message to other processes
+    const Message msg = init_message("anime", STARTED);
+    if (send_multicast(systemInfo, &msg) != 0) {
         return -1;
     }
-    ssize_t res = write(
-            sysInfo->proccessesInfo[currentProcId].pipes[dst][1],
-            msg,
-            sizeof(MessageHeader) + msg->s_header.s_payload_len);
-    if (res == -1) {
-        return -1;
-    }
-    return 0;
-}
-
-int send_multicast(void * self, const Message * msg) {
-    struct SystemInfo * sysInfo = (struct SystemInfo *) self;
-    if (currentProcId == -1) {
-        return -1;
-    }
-    for (local_id i = 0; i < sysInfo->proc_count; i ++) {
-        if (i == currentProcId) {continue;}
-        if (send(sysInfo, i, msg) != 0) {
+    printf("%d sended multicast message\n", currentProcId);
+    Message messages_tmp;
+    for (local_id i = 1; i < systemInfo->proc_count; i++) {
+        if (currentProcId == i) {continue;}
+        if (receive(systemInfo, i, &messages_tmp) != 0) {
             return -1;
+        }
+        if (messages_tmp.s_header.s_type == STARTED) {
+            printf("%d: received %d magic\n", currentProcId, messages_tmp.s_header.s_magic);
+        }
+    }
+    printf("process %d received all starts\n", currentProcId);
+    //some work here
+
+    //send done message
+    const Message done_msg = init_message("anime", DONE);
+    if (send_multicast(systemInfo, &done_msg) != 0) {
+        return -1;
+    }
+    Message messages_done_tmp;
+    for (local_id i = 1; i < systemInfo->proc_count; i++) {
+        if (currentProcId == i) {continue;}
+        if (receive(systemInfo, i, &messages_done_tmp) != 0) {
+            return -1;
+        }
+        if (messages_done_tmp.s_header.s_type == DONE) {
+            printf("%d: received done\n", currentProcId);
         }
     }
     return 0;
 }
 
-int receive(void * self, local_id from, Message * msg) {
-    struct SystemInfo * sysInfo = (struct SystemInfo *) self;
-    if (currentProcId == -1) {
-        return -1;
+int parent_work(struct SystemInfo systemInfo) {
+    Message messages_started_tmp;
+    currentProcId = 0;
+    for (local_id i = 1; i < systemInfo.proc_count; i++) {
+        if (receive(&systemInfo, i, &messages_started_tmp) != 0) {
+            return -1;
+        }
+        if (messages_started_tmp.s_header.s_type == STARTED) {
+            printf("%d: received start\n", currentProcId);
+        }
     }
-    ssize_t res = read(sysInfo->proccessesInfo[from].pipes[currentProcId][0], msg, sizeof(Message));
-    printf("%s\n", msg->s_payload);
-    if (res == -1) {
-        return -1;
+
+    for (local_id i = 1; i < systemInfo.proc_count; i++) {
+        if (receive(&systemInfo, i, &messages_started_tmp) != 0) {
+            return -1;
+        }
+        if (messages_started_tmp.s_header.s_type == DONE) {
+            printf("%d: received done\n", currentProcId);
+        }
     }
     return 0;
-}
-
-Message init_message(char *data, MessageType type) {
-    Message msg;
-    msg.s_header.s_magic = MESSAGE_MAGIC;
-    msg.s_header.s_payload_len = strlen(data);
-    msg.s_header.s_type = type;
-    strncpy(msg.s_payload, data, strlen(data));
-    return msg;
 }
 
 int main(int argc, char *argv[]) {
@@ -95,13 +94,8 @@ int main(int argc, char *argv[]) {
             case 0: {
                 //start proc
                 currentProcId = i;
-                if (i == 1) {
-                    const Message msg = init_message("Hello world", STARTED);
-                    //send(&systemInfo, 4, &msg);
-                    send_multicast(&systemInfo, &msg);
-                } else {
-                    Message msg;
-                    receive(&systemInfo, 1, &msg);
+                if (children_slave_work(&systemInfo) != 0 ) {
+                    exit(EXIT_FAILURE);
                 }
                 exit(EXIT_SUCCESS);
             }
@@ -110,5 +104,8 @@ int main(int argc, char *argv[]) {
             }
         }
     }
-    return 0;
+    if (parent_work(systemInfo) != 0) {
+        exit(EXIT_FAILURE);
+    }
+    exit(EXIT_SUCCESS);
 }
