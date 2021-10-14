@@ -10,7 +10,11 @@ extern local_id currentProcId;
 Message init_message(char *data, MessageType type) {
     Message msg;
     msg.s_header.s_magic = MESSAGE_MAGIC;
-    msg.s_header.s_payload_len = strlen(data);
+    if (data == NULL) {
+        msg.s_header.s_payload_len = 0;
+    } else {
+        msg.s_header.s_payload_len = strlen(data);
+    }
     msg.s_header.s_type = type;
     strncpy(msg.s_payload, data, strlen(data));
     return msg;

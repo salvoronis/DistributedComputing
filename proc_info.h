@@ -5,6 +5,10 @@
 #ifndef PA1_PROC_INFO_H
 #define PA1_PROC_INFO_H
 
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/types.h>
+
 struct ProcInfo {
     //pipes[0] - read [1] - write
     int     pipes[11][2];
