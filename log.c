@@ -28,47 +28,50 @@ const char *message_type_str(MessageType type){
         case DONE:
             return "DONE";
         case ACK:
-            break;
+            return "ACK";
         case STOP:
-            break;
+            return "STOP";
         case TRANSFER:
-            break;
+            return "TRANSFER";
         case BALANCE_HISTORY:
-            break;
-        case CS_REQUEST:
-            break;
-        case CS_REPLY:
-            break;
-        case CS_RELEASE:
-            break;
+            return "BALANCE_HISTORY";
+//        case CS_REQUEST:
+//            break;
+//        case CS_REPLY:
+//            break;
+//        case CS_RELEASE:
+//            break;
+        default:
+            return "UNKNOWN";
     }
-
-    return "UNKNOWN";
 }
 
-void log_pa(LogType type, const char *format, int argsAmount, ...){
-    va_list valist;
-    va_start(valist, argsAmount);
+void log_pa(LogType type, const char *format, int argc_count, ...){
+    va_list list;
+    va_start(list, argc_count);
 
     switch (type)
     {
         case Event:
         {
-            vprintf(format, valist);
+            vprintf(format, list);
             char logStr[256];
             memset(logStr, 0, sizeof(logStr));
-            vsnprintf(logStr, 256, format, valist);
+            vsnprintf(logStr, 256, format, list);
             fwrite(logStr, sizeof(char), strlen(logStr), eventLogFile);
             break;
         }
         case Pipe:
         {
-            vfprintf(pipesLogFile, format, valist);
+            char logStr[256];
+            memset(logStr, 0, sizeof(logStr));
+            vsnprintf(logStr, 256, format, list);
+            fwrite(logStr, sizeof(char), strlen(logStr), pipesLogFile);
             break;
         }
         case Info:
         {
-            Message *message = va_arg(valist, Message*);
+            Message *message = va_arg(list, Message*);
             printf("Message info:\n");
             printf("\ts_magic: 0x%X\n", message->s_header.s_magic);
             printf("\ts_payload_len: %d\n", message->s_header.s_payload_len);
@@ -79,18 +82,10 @@ void log_pa(LogType type, const char *format, int argsAmount, ...){
         }
         default:
         {
-            vprintf(format, valist);
+            vprintf(format, list);
             break;
         }
     }
 
-    va_end(valist);
-}
-
-void write_format_string(Message *message, const char *format, int argsAmount, ...){
-    va_list valist;
-    va_start(valist, argsAmount);
-    vsnprintf(message->s_payload, MAX_PAYLOAD_LEN, format, valist);
-    message->s_header.s_payload_len = strlen(message->s_payload) + 1;
-    va_end(valist);
+    va_end(list);
 }
