@@ -101,9 +101,13 @@ int close_unreachable_pipes(struct SystemInfo cur_sys_info){
         for (local_id j = 0; j < cur_sys_info.proc_count; j++) {
             if (i == currentProcId) {
                 close(cur_sys_info.proccessesInfo[i].pipes[j][0]);
-            } else {
+                continue;
+            } else if (j == currentProcId) {
                 close(cur_sys_info.proccessesInfo[i].pipes[j][1]);
+                continue;
             }
+            close(cur_sys_info.proccessesInfo[i].pipes[j][1]);
+            close(cur_sys_info.proccessesInfo[i].pipes[j][0]);
         }
     }
     return 0;
