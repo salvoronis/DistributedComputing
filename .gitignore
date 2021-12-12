@@ -1,4 +1,9 @@
 cmake-build-debug
 .idea
-pa1
 *.log
+pa2345_starter_code.tar.gz
+pa1/pa1
+pa2/pa2
+pa2/lib32
+pa2/lib64
+libruntime.so
