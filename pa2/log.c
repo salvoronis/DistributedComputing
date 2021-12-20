@@ -54,13 +54,11 @@ void log_pa(LogType type, const char *format, ...){
     {
         case Event:
         {
-            vprintf(format, list);
             char logStr[256];
-            va_list local_list;
-            va_start(local_list, format);
             memset(logStr, 0, sizeof(logStr));
-            vsnprintf(logStr, 256, format, local_list);
+            vsnprintf(logStr, 256, format, list);
             fwrite(logStr, sizeof(char), strlen(logStr), eventLogFile);
+            printf("%s", logStr);
             break;
         }
         case Pipe:
