@@ -1,4 +1,4 @@
-CC=gcc
+CC=clang
 CFLAGS=-g -Wall -pedantic -Werror -std=c99
 
 all: runPa2

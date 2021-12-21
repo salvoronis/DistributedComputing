@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stddef.h>
 #include <unistd.h>
 #include <sys/wait.h>
 #include <fcntl.h>
@@ -25,7 +26,7 @@ void transfer(void * parent_data, local_id src, local_id dst, balance_t amount){
         exit(-1);
     }
     Message ack_msg;
-    if (receive(system_info, dst, &ack_msg) != 0) {
+    if (receive_blocking(system_info, dst, &ack_msg) != 0) {
         perror("transfer error");
         exit(-1);
     }
@@ -66,7 +67,7 @@ int children_slave_work(struct SystemInfo * systemInfo) {
     Message messages_tmp;
     for (local_id i = 1; i < systemInfo->proc_count; i++) {
         if (currentProcId == i) {continue;}
-        if (receive(systemInfo, i, &messages_tmp) != 0) {
+        if (receive_blocking(systemInfo, i, &messages_tmp) != 0) {
             return -1;
         }
         if (messages_tmp.s_header.s_magic != MESSAGE_MAGIC &&
@@ -78,12 +79,22 @@ int children_slave_work(struct SystemInfo * systemInfo) {
     //some work here
 
     int running = 0;
+    BalanceHistory history;
+    history.s_id = currentProcId;
+    history.s_history_len = 0;
     while (running == 0) {
         Message msg;
         if (receive_any(systemInfo, &msg) < 0) {
             perror("receive all err");
             exit(EXIT_FAILURE);
         }
+        timestamp_t now = get_physical_time();
+        for (timestamp_t i = history.s_history_len; i < now; i++) {
+            history.s_history[i].s_time = i;
+            history.s_history[i].s_balance = local_balance;
+            history.s_history[i].s_balance_pending_in = 0;
+        }
+        history.s_history_len = now;
         if (msg.s_header.s_magic != MESSAGE_MAGIC) {
             perror("message magic not right");
             exit(EXIT_FAILURE);
@@ -98,6 +109,11 @@ int children_slave_work(struct SystemInfo * systemInfo) {
         }
     }
 
+    history.s_history[history.s_history_len].s_time = history.s_history_len;
+    history.s_history[history.s_history_len].s_balance = local_balance;
+    history.s_history[history.s_history_len].s_balance_pending_in = 0;
+    history.s_history_len++;
+
     //send done message
     log_pa(Event, log_done_fmt, get_physical_time(), currentProcId, local_balance);
     char end_str[256];
@@ -109,7 +125,7 @@ int children_slave_work(struct SystemInfo * systemInfo) {
     Message messages_done_tmp;
     for (local_id i = 1; i < systemInfo->proc_count; i++) {
         if (currentProcId == i) {continue;}
-        if (receive(systemInfo, i, &messages_done_tmp) != 0) {
+        if (receive_blocking(systemInfo, i, &messages_done_tmp) != 0) {
             return -1;
         }
         if (messages_done_tmp.s_header.s_magic != MESSAGE_MAGIC &&
@@ -118,6 +134,12 @@ int children_slave_work(struct SystemInfo * systemInfo) {
         }
     }
     log_pa(Event, log_received_all_done_fmt, get_physical_time(), currentProcId);
+
+    Message balance_history_msg = init_message(&history, BALANCE_HISTORY, offsetof(BalanceHistory, s_history) + sizeof(BalanceState) * history.s_history_len);
+    if (send(systemInfo, 0, &balance_history_msg) != 0) {
+        perror("balance history error");
+        exit(-1);
+    }
     return 0;
 }
 
@@ -136,7 +158,7 @@ int parent_work(struct SystemInfo systemInfo) {
     Message messages_started_tmp;
     currentProcId = 0;
     for (local_id i = 1; i < systemInfo.proc_count; i++) {
-        if (receive(&systemInfo, i, &messages_started_tmp) != 0) {
+        if (receive_blocking(&systemInfo, i, &messages_started_tmp) != 0) {
             return -1;
         }
         if (messages_started_tmp.s_header.s_magic != MESSAGE_MAGIC &&
@@ -157,7 +179,7 @@ int parent_work(struct SystemInfo systemInfo) {
     //parent work ends here
     Message messages_done_tmp;
     for (local_id i = 1; i < systemInfo.proc_count; i++) {
-        if (receive(&systemInfo, i, &messages_done_tmp) != 0) {
+        if (receive_blocking(&systemInfo, i, &messages_done_tmp) != 0) {
             return -1;
         }
         if (messages_done_tmp.s_header.s_magic != MESSAGE_MAGIC &&
@@ -166,6 +188,26 @@ int parent_work(struct SystemInfo systemInfo) {
         }
     }
     log_pa(Event, log_received_all_done_fmt, get_physical_time(), currentProcId);
+
+    Message messages_balance_history_tmp;
+    AllHistory allHistory;
+    allHistory.s_history_len = systemInfo.proc_count - 1;
+    for (local_id i = 1; i < systemInfo.proc_count; i++) {
+        if (receive_blocking(&systemInfo, i, &messages_balance_history_tmp) != 0) {
+            return -1;
+        }
+        if (messages_balance_history_tmp.s_header.s_magic != MESSAGE_MAGIC &&
+                messages_balance_history_tmp.s_header.s_type != BALANCE_HISTORY) {
+            return -1;
+        }
+        BalanceHistory *childrenHistory = (BalanceHistory*) messages_balance_history_tmp.s_payload;
+        allHistory.s_history[i - 1].s_id = childrenHistory->s_id;
+        allHistory.s_history[i - 1].s_history_len = childrenHistory->s_history_len;
+        for (int h = 0; h < childrenHistory->s_history_len; h++) {
+            allHistory.s_history[i - 1].s_history[h] = childrenHistory->s_history[h];
+        }
+    }
+    print_history(&allHistory);
     return 0;
 }
 
@@ -183,23 +225,43 @@ int close_unreachable_pipes(struct SystemInfo cur_sys_info){
                 }
                 continue;
             }
-            if (cur_sys_info.proccessesInfo[i].pipes[j][1] != 1) {
+            if (cur_sys_info.proccessesInfo[i].pipes[j][1] != -1) {
                 close(cur_sys_info.proccessesInfo[i].pipes[j][1]);
             }
-                if (cur_sys_info.proccessesInfo[i].pipes[j][0] != 1) {
-                    close(cur_sys_info.proccessesInfo[i].pipes[j][0]);
-                }
+            if (cur_sys_info.proccessesInfo[i].pipes[j][0] != -1) {
+                close(cur_sys_info.proccessesInfo[i].pipes[j][0]);
+            }
         }
     }
     return 0;
 }
 
+void dump_args(int argc, char* argv[]) {
+    printf("argv:");
+
+    for (int i = 0; i < argc; ++i) {
+        printf(" %p", (void*) argv[i]);
+    }
+
+    printf("\n");
+}
+
 int main(int argc, char *argv[]) {
     init_log();
     struct SystemInfo systemInfo;
-    // 0 process is always main
+    memset(&systemInfo, 0, sizeof(systemInfo));
     systemInfo.proccessesInfo[0].proc_pid = getpid();
-    systemInfo.proc_count = strtol(argv[2], NULL, 10) + 1;
+    systemInfo.proc_count = atoi(argv[2]) + 1;
+
+//    dump_args(argc, argv);
+    // 0 process is always main
+    for(int i = 0; i < 11; i++) {
+        for(int j = 0; j < 11; j++) {
+            systemInfo.proccessesInfo[i].pipes[j][0] = -2;
+            systemInfo.proccessesInfo[i].pipes[j][1] = -2;
+//            dump_args(argc, argv);
+        }
+    }
     for (int i = 0; i < systemInfo.proc_count; i++) {
         for (int j = 0; j < systemInfo.proc_count; j++) {
             if (i == j) {continue;}
@@ -207,11 +269,13 @@ int main(int argc, char *argv[]) {
                 perror("pipe error");
                 exit(EXIT_FAILURE);
             }
-            if (fcntl(systemInfo.proccessesInfo[i].pipes[j][0], F_SETFL, O_NONBLOCK) < 0) {
+            int flag = fcntl(systemInfo.proccessesInfo[i].pipes[j][0], F_GETFL);
+            if (fcntl(systemInfo.proccessesInfo[i].pipes[j][0], F_SETFL, flag | O_NONBLOCK) < 0) {
                 perror("fcntl 0 error");
                 exit(EXIT_FAILURE);
             }
-            if (fcntl(systemInfo.proccessesInfo[i].pipes[j][1], F_SETFL, O_NONBLOCK) < 0) {
+            flag = fcntl(systemInfo.proccessesInfo[i].pipes[j][1], F_GETFL);
+            if (fcntl(systemInfo.proccessesInfo[i].pipes[j][1], F_SETFL, flag | O_NONBLOCK) < 0) {
                 perror("fcntl 1 error");
                 exit(EXIT_FAILURE);
             }
@@ -220,6 +284,8 @@ int main(int argc, char *argv[]) {
                    systemInfo.proccessesInfo[i].pipes[j][0]);
         }
     }
+//    systemInfo.proccessesInfo[0].proc_pid = getpid();
+//    systemInfo.proc_count = atoi(argv[2]) + 1;
     for (local_id i = 1; i < systemInfo.proc_count; i++) {
         systemInfo.proccessesInfo[i].proc_pid = fork();
         switch (systemInfo.proccessesInfo[i].proc_pid) {
@@ -229,8 +295,8 @@ int main(int argc, char *argv[]) {
             }
             case 0: {
                 //start proc
-                currentProcId = i;
                 local_balance = atoi(argv[i + 2]);
+                currentProcId = i;
                 close_unreachable_pipes(systemInfo);
                 if (children_slave_work(&systemInfo) != 0 ) {
                     exit(EXIT_FAILURE);
