@@ -1,7 +1,11 @@
 CC=clang
 CFLAGS=-g -Wall -pedantic -Werror -std=c99
 
-all: runPa3
+all: runPa4
+
+runPa4:
+	rm -f ./pa4/*.log
+	$(CC) $(CFLAGS) ./pa4/*.c -o ./pa4/pa4 -L. -lruntime
 
 runPa3:
 	rm -f ./pa3/events.log ./pa3/pipes.log
